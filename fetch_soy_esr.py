@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""拉取 USDA FAS ESR 美豆、美玉米、美豆粕、美豆油、美小麦周度出口销售。
+"""拉取 USDA FAS ESR 美豆、美玉米、美豆粕、美豆油、美小麦、美软红冬小麦周度出口销售。
 
-五个品种合成同一个网页，并各写一份 xlsx。
+六个品种合成同一个网页，并各写一份 xlsx。
 密钥只读环境变量 USDA_FAS_API_KEY。脚本和输出里都不写密钥。
 
 更新一周只需要在仓库根目录运行：
@@ -52,6 +52,8 @@ PRODUCTS = (
     # 小麦用 All Wheat 107（各类小麦合计）。ESR 小麦营销年 6 月 1 日–5 月 31 日。
     # 出口目标.xlsx 没有小麦块时 target_optional 生效：进度留空，不编目标。
     {"id": "wheat", "code": 107, "en": "All Wheat", "zh": "美小麦", "cache": "wheat_107", "xlsx": "美小麦周度出口销售.xlsx", "start_month": 6, "target_optional": True},
+    # 软红冬小麦 SRW（CBOT ZW 对应品种），ESR 代码 102，营销年同小麦 6 月 1 日–5 月 31 日。
+    {"id": "srw", "code": 102, "en": "Wheat - SRW", "zh": "美软红冬小麦", "cache": "srw_102", "xlsx": "美软红冬小麦周度出口销售.xlsx", "start_month": 6, "target_optional": True},
 )
 MY_NOTE = {
     "jun": "ESR 官方营销年 6 月 1 日–5 月 31 日，接口 marketYear 是结束年。季节性图从 6 月的第 1 个报告周起。",
@@ -1335,13 +1337,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 @@WM_DIV@@
 <div class="wrap">
   <h1>美国周度出口销售</h1>
-  <p class="sub">USDA FAS ESR，公吨。美豆、美玉米、美豆粕、美豆油、美小麦同一套目的地和表。出口目标读同目录工作簿各品种「累计出口目标(t)」，列是 16/17年度到 26/27年度，没有单独的本年度、下年度列，也没有 27/28。正数红、负数绿。默认显示美豆。</p>
+  <p class="sub">USDA FAS ESR，公吨。美豆、美玉米、美豆粕、美豆油、美小麦、美软红冬小麦同一套目的地和表。出口目标读同目录工作簿各品种「累计出口目标(t)」，列是 16/17年度到 26/27年度，没有单独的本年度、下年度列，也没有 27/28。正数红、负数绿。默认显示美豆。</p>
   <nav class="tabs" id="tabs">
     <button type="button" class="tab on" data-id="soy">美豆</button>
     <button type="button" class="tab" data-id="corn">美玉米</button>
     <button type="button" class="tab" data-id="meal">美豆粕</button>
     <button type="button" class="tab" data-id="oil">美豆油</button>
     <button type="button" class="tab" data-id="wheat">美小麦</button>
+    <button type="button" class="tab" data-id="srw">美软红冬小麦</button>
   </nav>
   @@PANELS@@
 </div>
@@ -1674,15 +1677,15 @@ def write_md(records):
     lines = [
         "# 美国周度出口销售口径",
         "",
-        "五个品种来自 USDA FAS Export Sales Reporting，单位都是 Metric Tons。"
-        "网页是 `美豆周度出口销售.html`，顶部切换美豆、美玉米、美豆粕、美豆油、美小麦，默认美豆。"
+        "六个品种来自 USDA FAS Export Sales Reporting，单位都是 Metric Tons。"
+        "网页是 `美豆周度出口销售.html`，顶部切换美豆、美玉米、美豆粕、美豆油、美小麦（All Wheat 107）、美软红冬小麦（SRW 102），默认美豆。"
         "密钥只从环境变量 `USDA_FAS_API_KEY` 读取，不写入 html、xlsx、md 或缓存。",
         "",
         "## 出口目标",
         "",
         "`出口目标.xlsx` 有四块，顺序是美豆、美玉米、美豆粕、美豆油。每块三行：品种名、累计出口目标(t)、日期。"
         "日期列四个品种一致，都是 16/17年度到 26/27年度。表里没有名为「本年度」或「下年度」的列，也没有 27/28。"
-        "表里没有美小麦块，美小麦的装运进度、销售进度留空，同比进度也留空；在表里按同样三行格式加上「美小麦」块后会自动计算。"
+        "表里没有「美小麦」「美软红冬小麦」块，这两个品种的装运进度、销售进度留空，同比进度也留空；在表里按同样三行格式加上同名块后会自动计算。"
         "本年度出口目标取当前营销年那一列。下年度出口目标取下一列。当前营销年若是 26/27，下一列 27/28 不存在，下年度销售进度留空。"
         "16/17 与 17/18 早于样本，页面不用。脚本不改这个文件。",
         "",
@@ -1695,10 +1698,10 @@ def write_md(records):
         "基址 `https://api.fas.usda.gov/api/esr`，路径 "
         "`/exports/commodityCode/{代码}/allCountries/marketYear/{年}`。"
         f"`{{年}}` 是营销年结束年。脚本请求 {API_YEARS[0]} 至 {API_YEARS[-1]}，上限随当前营销年自动扩展。"
-        "当前营销年优先取 datareleasedates 里该品种的 marketYear；拿不到时按该品种营销年起始月份（美豆、美玉米 9 月，美豆粕、美豆油 10 月，美小麦 6 月）和运行当天日期推算。"
+        "当前营销年优先取 datareleasedates 里该品种的 marketYear；拿不到时按该品种营销年起始月份（美豆、美玉米 9 月，美豆粕、美豆油 10 月，美小麦、美软红冬小麦 6 月）和运行当天日期推算。"
         "当前营销年之后的年份若返回空列表，视作尚未发布，不补数。"
         "周序按周末从早到晚，相邻周末必须相隔 7 天，否则停止。"
-        "首周月份用来确认官方营销年：都在 9 月上旬则是 9 月 1 日–8 月 31 日；都在 10 月上旬则是 10 月 1 日–9 月 30 日；都在 6 月上旬则是 6 月 1 日–5 月 31 日（美小麦）。"
+        "首周月份用来确认官方营销年：都在 9 月上旬则是 9 月 1 日–8 月 31 日；都在 10 月上旬则是 10 月 1 日–9 月 30 日；都在 6 月上旬则是 6 月 1 日–5 月 31 日（美小麦、美软红冬小麦）。"
         "季节性图从该营销年第 1 个报告周画起。月份刻度用周数最完整的一年。",
         "颜色从这一张图的最新营销年往回数：红、紫、黄、绿、蓝，更早浅色。红色不固定在某一年。",
         "网页水印用 `excel_s/chart_watermark.py`，文字 shengbanghengchang_carina。",
@@ -1714,7 +1717,7 @@ def write_md(records):
         "",
         "## 目的地",
         "",
-        "五个品种用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
+        "六个品种用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
         "东亚 = 中国 5700、日本 5880、韩国 5800、中国台湾 5830。",
         "东南亚 = 印尼 5600、泰国 5490、越南 5520、孟加拉 5380。",
         "中亚 = 巴基斯坦 5350、土耳其 4890。这是指定分组，不是 FAS 地区名。",
@@ -1793,8 +1796,8 @@ def write_md(records):
             "- 缓存写在 `cache/`，是接口原文。不带参数运行时，每次都刷新参考表（commodities、countries、unitsOfMeasure、datareleasedates），"
             "并对每个品种重新拉取当前营销年；历史营销年已有缓存就复用，缺哪年补哪年。接口失败就退出，不用旧缓存冒充新数据。",
             "- `python excel_s/us_weekly_export/fetch_soy_esr.py --from-cache`：不联网，只用 `cache/` 里已有的文件重画出表；缺历史营销年缓存时停止。",
-            "- `美豆周度出口销售.html`：五个品种合成的网页。",
-            "- `美豆周度出口销售.xlsx`、`美玉米周度出口销售.xlsx`、`美豆粕周度出口销售.xlsx`、`美豆油周度出口销售.xlsx`、`美小麦周度出口销售.xlsx`。",
+            "- `美豆周度出口销售.html`：六个品种合成的网页。",
+            "- `美豆周度出口销售.xlsx`、`美玉米周度出口销售.xlsx`、`美豆粕周度出口销售.xlsx`、`美豆油周度出口销售.xlsx`、`美小麦周度出口销售.xlsx`、`美软红冬小麦周度出口销售.xlsx`。",
             "- `出口目标.xlsx`：只读。",
             "",
         ]

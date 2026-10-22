@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""拉取 USDA FAS ESR 美豆、美玉米、美豆粕、美豆油周度出口销售。
+"""拉取 USDA FAS ESR 美豆、美玉米、美豆粕、美豆油、美小麦周度出口销售。
 
-四个品种合成同一个网页，并各写一份 xlsx。
+五个品种合成同一个网页，并各写一份 xlsx。
 密钥只读环境变量 USDA_FAS_API_KEY。脚本和输出里都不写密钥。
 
 更新一周只需要在仓库根目录运行：
@@ -13,7 +13,7 @@
 - 对每个品种重新拉取「当前营销年」及其后已列入的营销年，覆盖 cache/ 里的旧文件；
 - 历史营销年已有缓存就复用，缺哪年补哪年。
 当前营销年优先取 datareleasedates 里该品种的 marketYear（营销年结束年）；
-拿不到时按品种营销年起始月份（PRODUCTS 的 start_month，9 月或 10 月）和今天日期推算。
+拿不到时按品种营销年起始月份（PRODUCTS 的 start_month，6、9 或 10 月）和今天日期推算。
 API_YEARS 没覆盖到当前营销年时自动扩展。
 接口失败则退出，不编造序列，也不拿旧缓存冒充新数据。
 --from-cache 只用 cache/ 里已有的文件重画出表，不联网。
@@ -49,13 +49,17 @@ PRODUCTS = (
     {"id": "corn", "code": 401, "en": "Corn", "zh": "美玉米", "cache": "corn_401", "xlsx": "美玉米周度出口销售.xlsx", "start_month": 9},
     {"id": "meal", "code": 901, "en": "Soybean cake & meal", "zh": "美豆粕", "cache": "meal_901", "xlsx": "美豆粕周度出口销售.xlsx", "start_month": 10},
     {"id": "oil", "code": 902, "en": "Soybean Oil", "zh": "美豆油", "cache": "oil_902", "xlsx": "美豆油周度出口销售.xlsx", "start_month": 10},
+    # 小麦用 All Wheat 107（各类小麦合计）。ESR 小麦营销年 6 月 1 日–5 月 31 日。
+    # 出口目标.xlsx 没有小麦块时 target_optional 生效：进度留空，不编目标。
+    {"id": "wheat", "code": 107, "en": "All Wheat", "zh": "美小麦", "cache": "wheat_107", "xlsx": "美小麦周度出口销售.xlsx", "start_month": 6, "target_optional": True},
 )
 MY_NOTE = {
+    "jun": "ESR 官方营销年 6 月 1 日–5 月 31 日，接口 marketYear 是结束年。季节性图从 6 月的第 1 个报告周起。",
     "sep": "ESR 官方营销年 9 月 1 日–8 月 31 日，接口 marketYear 是结束年。",
     "oct": "ESR 官方营销年 10 月 1 日–9 月 30 日，接口 marketYear 是结束年。季节性图从 10 月的第 1 个报告周起。",
 }
 # 营销年起始月份与 MY_NOTE 口径的对应；index_rows 从数据识别出的口径必须与 PRODUCTS 的 start_month 一致。
-CALENDAR_START = {"sep": 9, "oct": 10}
+CALENDAR_START = {"jun": 6, "sep": 9, "oct": 10}
 TARGET_XLSX = ROOT / "出口目标.xlsx"
 CACHE = ROOT / "cache"
 OUT_HTML = ROOT / "美豆周度出口销售.html"
@@ -365,6 +369,9 @@ def load_targets() -> dict:
             fail(f"{head} 在出口目标里出现两次。不算进度。")
         found[pid] = out
         i += 3
+    for p in PRODUCTS:
+        if p["id"] not in found and p.get("target_optional"):
+            found[p["id"]] = {}
     missing = [p["zh"] for p in PRODUCTS if p["id"] not in found]
     if missing:
         fail("出口目标.xlsx 缺少：" + "、".join(missing) + "。不算进度。")
@@ -531,8 +538,8 @@ def index_rows(raw_years: dict, names: dict, region1: set, commodity_code: int):
                     f"代码 {commodity_code} {label_of_api(year)} 周序列不连续："
                     f"{ordered[i - 1]} → {ordered[i]} 间隔 {delta} 天。停止，不对齐猜测。"
                 )
-        if parse_day(ordered[0]) < parse_day("2018-09-01"):
-            fail(f"代码 {commodity_code} 首周 {ordered[0]} 早于 2018-09-01")
+        if parse_day(ordered[0]) < parse_day("2018-06-01"):
+            fail(f"代码 {commodity_code} 首周 {ordered[0]} 早于 2018-06-01")
         weeks[year] = ordered
         # 每个周末至少有一个国家
         if any(len(bucket[d]) == 0 for d in ordered):
@@ -555,7 +562,9 @@ def index_rows(raw_years: dict, names: dict, region1: set, commodity_code: int):
     if bloc_nonzero:
         fail("接口同时给出欧盟集团行和成员国行，停止以免双重计算。")
     months = {parse_day(ordered[0]).month for ordered in weeks.values()}
-    if months == {9}:
+    if months == {6}:
+        calendar = "jun"
+    elif months == {9}:
         calendar = "sep"
     elif months == {10}:
         calendar = "oct"
@@ -1205,7 +1214,7 @@ def target_sentence(latest_year: str, targets: dict) -> str:
 
 
 def foot_text(payload) -> str:
-    axis = "9 月" if payload["calendar"] == "sep" else "10 月"
+    axis = {"jun": "6 月", "sep": "9 月", "oct": "10 月"}[payload["calendar"]]
     return (
         f"横轴从{axis}的第 1 个报告周起，按各营销年的周序对齐。月份刻度用周数最完整的一年。"
         "颜色从这张图的最新营销年往回数：红、紫、黄、绿、蓝，更早的年份为浅色。"
@@ -1326,12 +1335,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 @@WM_DIV@@
 <div class="wrap">
   <h1>美国周度出口销售</h1>
-  <p class="sub">USDA FAS ESR，公吨。美豆、美玉米、美豆粕、美豆油同一套目的地和表。出口目标读同目录工作簿各品种「累计出口目标(t)」，列是 16/17年度到 26/27年度，没有单独的本年度、下年度列，也没有 27/28。正数红、负数绿。默认显示美豆。</p>
+  <p class="sub">USDA FAS ESR，公吨。美豆、美玉米、美豆粕、美豆油、美小麦同一套目的地和表。出口目标读同目录工作簿各品种「累计出口目标(t)」，列是 16/17年度到 26/27年度，没有单独的本年度、下年度列，也没有 27/28。正数红、负数绿。默认显示美豆。</p>
   <nav class="tabs" id="tabs">
     <button type="button" class="tab on" data-id="soy">美豆</button>
     <button type="button" class="tab" data-id="corn">美玉米</button>
     <button type="button" class="tab" data-id="meal">美豆粕</button>
     <button type="button" class="tab" data-id="oil">美豆油</button>
+    <button type="button" class="tab" data-id="wheat">美小麦</button>
   </nav>
   @@PANELS@@
 </div>
@@ -1396,6 +1406,7 @@ function refWeeks(product) {
 }
 function tickMonths(product) {
   if (product.calendar === "oct") return {"10月":1, "1月":1, "4月":1, "7月":1};
+  if (product.calendar === "jun") return {"6月":1, "9月":1, "12月":1, "3月":1};
   return {"9月":1, "12月":1, "3月":1, "6月":1};
 }
 function niceStep(span, n) {
@@ -1663,14 +1674,15 @@ def write_md(records):
     lines = [
         "# 美国周度出口销售口径",
         "",
-        "四个品种来自 USDA FAS Export Sales Reporting，单位都是 Metric Tons。"
-        "网页是 `美豆周度出口销售.html`，顶部切换美豆、美玉米、美豆粕、美豆油，默认美豆。"
+        "五个品种来自 USDA FAS Export Sales Reporting，单位都是 Metric Tons。"
+        "网页是 `美豆周度出口销售.html`，顶部切换美豆、美玉米、美豆粕、美豆油、美小麦，默认美豆。"
         "密钥只从环境变量 `USDA_FAS_API_KEY` 读取，不写入 html、xlsx、md 或缓存。",
         "",
         "## 出口目标",
         "",
         "`出口目标.xlsx` 有四块，顺序是美豆、美玉米、美豆粕、美豆油。每块三行：品种名、累计出口目标(t)、日期。"
         "日期列四个品种一致，都是 16/17年度到 26/27年度。表里没有名为「本年度」或「下年度」的列，也没有 27/28。"
+        "表里没有美小麦块，美小麦的装运进度、销售进度留空，同比进度也留空；在表里按同样三行格式加上「美小麦」块后会自动计算。"
         "本年度出口目标取当前营销年那一列。下年度出口目标取下一列。当前营销年若是 26/27，下一列 27/28 不存在，下年度销售进度留空。"
         "16/17 与 17/18 早于样本，页面不用。脚本不改这个文件。",
         "",
@@ -1683,10 +1695,10 @@ def write_md(records):
         "基址 `https://api.fas.usda.gov/api/esr`，路径 "
         "`/exports/commodityCode/{代码}/allCountries/marketYear/{年}`。"
         f"`{{年}}` 是营销年结束年。脚本请求 {API_YEARS[0]} 至 {API_YEARS[-1]}，上限随当前营销年自动扩展。"
-        "当前营销年优先取 datareleasedates 里该品种的 marketYear；拿不到时按该品种营销年起始月份（美豆、美玉米 9 月，美豆粕、美豆油 10 月）和运行当天日期推算。"
+        "当前营销年优先取 datareleasedates 里该品种的 marketYear；拿不到时按该品种营销年起始月份（美豆、美玉米 9 月，美豆粕、美豆油 10 月，美小麦 6 月）和运行当天日期推算。"
         "当前营销年之后的年份若返回空列表，视作尚未发布，不补数。"
         "周序按周末从早到晚，相邻周末必须相隔 7 天，否则停止。"
-        "首周月份用来确认官方营销年：都在 9 月上旬则是 9 月 1 日–8 月 31 日；都在 10 月上旬则是 10 月 1 日–9 月 30 日。"
+        "首周月份用来确认官方营销年：都在 9 月上旬则是 9 月 1 日–8 月 31 日；都在 10 月上旬则是 10 月 1 日–9 月 30 日；都在 6 月上旬则是 6 月 1 日–5 月 31 日（美小麦）。"
         "季节性图从该营销年第 1 个报告周画起。月份刻度用周数最完整的一年。",
         "颜色从这一张图的最新营销年往回数：红、紫、黄、绿、蓝，更早浅色。红色不固定在某一年。",
         "网页水印用 `excel_s/chart_watermark.py`，文字 shengbanghengchang_carina。",
@@ -1702,7 +1714,7 @@ def write_md(records):
         "",
         "## 目的地",
         "",
-        "四个品种用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
+        "五个品种用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
         "东亚 = 中国 5700、日本 5880、韩国 5800、中国台湾 5830。",
         "东南亚 = 印尼 5600、泰国 5490、越南 5520、孟加拉 5380。",
         "中亚 = 巴基斯坦 5350、土耳其 4890。这是指定分组，不是 FAS 地区名。",
@@ -1759,7 +1771,11 @@ def write_md(records):
         lines.append(
             f"Total 周度装运 {shown('total','weeklyExports')} 万吨，累计装运 {shown('total','accumulatedExports')} 万吨，"
             f"本年度净销售 {shown('total','currentMYNetSales')} 万吨，本年度总销售 {shown('total','currentMYTotalCommitment')} 万吨，"
-            f"装运进度 {shown('total','shipProg')}%，本年度销售进度 {shown('total','saleProg')}%。"
+            + (
+                f"装运进度 {shown('total','shipProg')}%，本年度销售进度 {shown('total','saleProg')}%。"
+                if series["total"]["shipProg"][lab][wi] is not None
+                else "出口目标表里没有该品种的本年度目标，装运进度、本年度销售进度留空。"
+            )
         )
         lines.append(
             f"中国周度装运 {shown('cn','weeklyExports')} 万吨，累计装运 {shown('cn','accumulatedExports')} 万吨，"
@@ -1777,8 +1793,8 @@ def write_md(records):
             "- 缓存写在 `cache/`，是接口原文。不带参数运行时，每次都刷新参考表（commodities、countries、unitsOfMeasure、datareleasedates），"
             "并对每个品种重新拉取当前营销年；历史营销年已有缓存就复用，缺哪年补哪年。接口失败就退出，不用旧缓存冒充新数据。",
             "- `python excel_s/us_weekly_export/fetch_soy_esr.py --from-cache`：不联网，只用 `cache/` 里已有的文件重画出表；缺历史营销年缓存时停止。",
-            "- `美豆周度出口销售.html`：四个品种合成的网页。",
-            "- `美豆周度出口销售.xlsx`、`美玉米周度出口销售.xlsx`、`美豆粕周度出口销售.xlsx`、`美豆油周度出口销售.xlsx`。",
+            "- `美豆周度出口销售.html`：五个品种合成的网页。",
+            "- `美豆周度出口销售.xlsx`、`美玉米周度出口销售.xlsx`、`美豆粕周度出口销售.xlsx`、`美豆油周度出口销售.xlsx`、`美小麦周度出口销售.xlsx`。",
             "- `出口目标.xlsx`：只读。",
             "",
         ]

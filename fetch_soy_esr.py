@@ -50,7 +50,8 @@ PRODUCTS = (
     {"id": "meal", "code": 901, "en": "Soybean cake & meal", "zh": "美豆粕", "cache": "meal_901", "xlsx": "美豆粕周度出口销售.xlsx", "start_month": 10},
     {"id": "oil", "code": 902, "en": "Soybean Oil", "zh": "美豆油", "cache": "oil_902", "xlsx": "美豆油周度出口销售.xlsx", "start_month": 10},
     # 小麦用 All Wheat 107（各类小麦合计）。ESR 小麦营销年 6 月 1 日–5 月 31 日。
-    # 出口目标.xlsx 没有小麦块时 target_optional 生效：进度留空，不编目标。
+    # 出口目标.xlsx 认「美小麦」或别名「美麦」为该品种目标块，表内块名不改。
+    # 没有小麦块时 target_optional 生效：进度留空，不编目标。
     {"id": "wheat", "code": 107, "en": "All Wheat", "zh": "美小麦", "cache": "wheat_107", "xlsx": "美小麦周度出口销售.xlsx", "start_month": 6, "target_optional": True},
     # 软红冬小麦 SRW（CBOT ZW 对应品种），ESR 代码 102，营销年同小麦 6 月 1 日–5 月 31 日。
     {"id": "srw", "code": 102, "en": "Wheat - SRW", "zh": "美软红冬小麦", "cache": "srw_102", "xlsx": "美软红冬小麦周度出口销售.xlsx", "start_month": 6, "target_optional": True},
@@ -63,6 +64,8 @@ MY_NOTE = {
 # 营销年起始月份与 MY_NOTE 口径的对应；index_rows 从数据识别出的口径必须与 PRODUCTS 的 start_month 一致。
 CALENDAR_START = {"jun": 6, "sep": 9, "oct": 10}
 TARGET_XLSX = ROOT / "出口目标.xlsx"
+# 出口目标.xlsx 块名别名。表内名称保持用户写法，不改文件。
+TARGET_ALIASES = {"美麦": "wheat"}  # All Wheat 107，产品中文名仍是「美小麦」
 CACHE = ROOT / "cache"
 OUT_HTML = ROOT / "美豆周度出口销售.html"
 OUT_MD = ROOT / "口径说明.md"
@@ -318,7 +321,9 @@ def _parse_my_label(lab) -> str:
 
 
 def load_targets() -> dict:
-    """四个品种各一块。没有名为本年度/下年度的列，年份列必须彼此一致。"""
+    """按块读取出口目标。块名用品种中文名，另接受 TARGET_ALIASES（如「美麦」→ wheat）。
+    没有名为本年度/下年度的列，年份列必须彼此一致。不改这个工作簿里的块名。
+    """
     if not TARGET_XLSX.exists():
         fail(f"找不到出口目标：{TARGET_XLSX}")
     wb = load_workbook(TARGET_XLSX, data_only=True, read_only=True)
@@ -326,6 +331,7 @@ def load_targets() -> dict:
     rows = list(ws.iter_rows(values_only=True))
     wb.close()
     titles = {p["zh"]: p["id"] for p in PRODUCTS}
+    titles.update(TARGET_ALIASES)
     found = {}
     label_sig = None
     i = 0
@@ -1097,17 +1103,15 @@ def _cls(tenths):
     return "zero"
 
 
-# 截图区里只有 Total 有出口目标。中国、除中国外不除总目标。
-SHOT_PROGRESS_TOTAL_ONLY = frozenset({"shipProg", "saleProg"})
-
-
+# 截图区 Total、中国、除中国外三行都画装运进度和本年度销售进度。
+# 分母都是该品种总出口目标，不是分项目标。
 def shot_block(payload) -> str:
     latest = payload["latest"]
     notes = {
         "currentMYNetSales": "currentMYNetSales",
         "currentMYTotalCommitment": "currentMYTotalCommitment",
-        "shipProg": "累计装运 Total / 出口目标",
-        "saleProg": "本年度总销售 Total / 出口目标",
+        "shipProg": "累计装运 / 出口目标",
+        "saleProg": "本年度总销售 / 出口目标",
     }
     heads = ['<div class="shot-corner"></div>']
     for key, label, unit in SHOT_FIELDS:
@@ -1118,13 +1122,10 @@ def shot_block(payload) -> str:
     for name, ident in SHOT_ROWS:
         row = [f'<div class="shot-rowhead">{name}</div>']
         for key, _label, unit in SHOT_FIELDS:
-            if key in SHOT_PROGRESS_TOTAL_ONLY and ident != "total":
-                row.append('<div class="shot-na"></div>')
-            else:
-                row.append(
-                    f'<figure class="shot-cell" data-id="{ident}" data-key="{key}" data-unit="{unit}">'
-                    "<canvas></canvas></figure>"
-                )
+            row.append(
+                f'<figure class="shot-cell" data-id="{ident}" data-key="{key}" data-unit="{unit}">'
+                "<canvas></canvas></figure>"
+            )
         body.append("".join(row))
     pid = payload["id"]
     return (
@@ -1230,7 +1231,7 @@ def other_block(payload) -> str:
     pid = payload["id"]
     return (
         '<h2 class="sec">其他指标</h2>'
-        '<p class="def">截图区：净销售和总销售是 Total、中国、除中国外。装运进度和销售进度只画 Total，中国和除中国外注明无分项目标。这里可再按目的地看其余指标，横轴从该营销年第 1 周起，最新一周标在端点旁。</p>'
+        '<p class="def">截图区：净销售、总销售、装运进度和本年度销售进度都是 Total、中国、除中国外三行。中国和除中国外的装运进度、销售进度也用该品种总出口目标做分母（累计装运或本年度总销售除以同一个出口目标）。这里可再按目的地看其余指标，横轴从该营销年第 1 周起，最新一周标在端点旁。</p>'
         '<div class="controls">'
         f'<label for="dest-{pid}">目的地</label>'
         f'<select id="dest-{pid}"></select>'
@@ -1683,14 +1684,17 @@ def write_md(records):
         "",
         "## 出口目标",
         "",
-        "`出口目标.xlsx` 有四块，顺序是美豆、美玉米、美豆粕、美豆油。每块三行：品种名、累计出口目标(t)、日期。"
-        "日期列四个品种一致，都是 16/17年度到 26/27年度。表里没有名为「本年度」或「下年度」的列，也没有 27/28。"
-        "表里没有「美小麦」「美软红冬小麦」块，这两个品种的装运进度、销售进度留空，同比进度也留空；在表里按同样三行格式加上同名块后会自动计算。"
+        "`出口目标.xlsx` 按块读取，每块三行：品种名、累计出口目标(t)、日期。"
+        "当前表有美豆、美玉米、美豆粕、美豆油，以及「美麦」块。"
+        "「美麦」是美小麦（All Wheat 107）的出口目标，表内块名保持「美麦」，脚本按别名识别，不把块名改成「美小麦」。"
+        "日期列各块一致，都是 16/17年度到 26/27年度。表里没有名为「本年度」或「下年度」的列，也没有 27/28。"
+        "表里没有「美软红冬小麦」块，该品种的装运进度、销售进度留空，同比进度也留空，不编造目标；按同样三行格式加上「美软红冬小麦」块后会自动计算。"
         "本年度出口目标取当前营销年那一列。下年度出口目标取下一列。当前营销年若是 26/27，下一列 27/28 不存在，下年度销售进度留空。"
         "16/17 与 17/18 早于样本，页面不用。脚本不改这个文件。",
         "",
-        "装运进度 = accumulatedExports / 本年度出口目标。"
-        "本年度销售进度 = currentMYTotalCommitment / 本年度出口目标。"
+        "装运进度 = 该行 accumulatedExports / 该品种总出口目标。"
+        "本年度销售进度 = 该行 currentMYTotalCommitment / 同一个出口目标。"
+        "Total、中国、除中国外三行都用这同一个品种总目标做分母，不是分项目标。"
         "下年度销售进度 = nextMYOutstandingSales / 下年度出口目标。",
         "",
         "## 接口与营销年",
@@ -1733,9 +1737,9 @@ def write_md(records):
         "",
         "## 页面",
         "",
-        "每个品种一页：白底截图区仍是 4 列。本年度净销售、本年度总销售是 Total、中国、除中国外三行。"
-        "装运进度 = 累计装运 Total / 出口目标，本年度销售进度 = 本年度总销售 Total / 出口目标，这两列只画 Total。"
-        "中国和除中国外不除总目标，格内注明无分项目标。"
+        "每个品种一页：白底截图区仍是 4 列。本年度净销售、本年度总销售、装运进度、本年度销售进度都是 Total、中国、除中国外三行。"
+        "装运进度 = 该行累计装运 / 该品种总出口目标，本年度销售进度 = 该行本年度总销售 / 同一个出口目标。"
+        "三行都画季节图，分母都是该品种总出口目标，不是分项目标。"
         "没有表格，没有目的地下拉。进度图纵轴是百分比，最新一周有数据标签。",
         "截图区下面可以用下拉看其余指标。再下面三张表：本年度总销售、本年度净销售、下一年度未装运。"
         "本年度净销售表是最新一周的单周净销售，与季节性图最新点同一口径。列是地区、目的地、指标、同比去年、同比5年均值。",
@@ -1780,10 +1784,26 @@ def write_md(records):
                 else "出口目标表里没有该品种的本年度目标，装运进度、本年度销售进度留空。"
             )
         )
+        def prog_clause(ident):
+            if series[ident]["shipProg"][lab][wi] is not None:
+                return (
+                    f"装运进度 {shown(ident,'shipProg')}%，"
+                    f"本年度销售进度 {shown(ident,'saleProg')}%。"
+                )
+            return "出口目标表里没有该品种的本年度目标，装运进度、本年度销售进度留空。"
+
         lines.append(
             f"中国周度装运 {shown('cn','weeklyExports')} 万吨，累计装运 {shown('cn','accumulatedExports')} 万吨，"
-            f"本年度净销售 {shown('cn','currentMYNetSales')} 万吨，本年度总销售 {shown('cn','currentMYTotalCommitment')} 万吨。"
-            "中国、除中国外无分项目标，截图区不计算这两行的装运进度和销售进度。"
+            f"本年度净销售 {shown('cn','currentMYNetSales')} 万吨，本年度总销售 {shown('cn','currentMYTotalCommitment')} 万吨，"
+            + prog_clause("cn")
+            + f"除中国外周度装运 {shown('excn','weeklyExports')} 万吨，累计装运 {shown('excn','accumulatedExports')} 万吨，"
+            f"本年度净销售 {shown('excn','currentMYNetSales')} 万吨，本年度总销售 {shown('excn','currentMYTotalCommitment')} 万吨，"
+            + prog_clause("excn")
+            + (
+                "中国和除中国外的装运进度、销售进度也用该品种总出口目标做分母。"
+                if series["total"]["shipProg"][lab][wi] is not None
+                else ""
+            )
         )
         lines.append(" ".join(overlap_bits(rec["weeks"])))
         lines.append("")
@@ -1890,7 +1910,7 @@ def overlap_bits(weeks) -> list[str]:
 def main():
     from_cache = "--from-cache" in sys.argv
     all_targets = load_targets()
-    print("出口目标四品种年份列一致：16/17 至 26/27。没有本年度/下年度专列，没有 27/28。")
+    print("出口目标各块年份列一致：16/17 至 26/27。没有本年度/下年度专列，没有 27/28。")
     if from_cache:
         print("--from-cache：只用 cache/ 里的文件重画，不联网")
         names, region1, release_map = load_reference_cache()

@@ -37,7 +37,7 @@ from openpyxl.utils import get_column_letter
 ROOT = Path(__file__).resolve().parent
 EXCEL_S = ROOT.parent
 sys.path.insert(0, str(EXCEL_S))
-from chart_watermark import html_watermark_css, html_watermark_div, seasonal_year_styles  # noqa: E402
+from chart_watermark import seasonal_year_styles  # noqa: E402
 
 BASE = "https://api.fas.usda.gov/api/esr"
 # 接口 marketYear 是营销年结束年。2019 = 18/19，2027 = 26/27。
@@ -1263,8 +1263,6 @@ def panel_html(payload) -> str:
 def write_html(products):
     data = json.dumps(products, ensure_ascii=False).replace("<", "\\u003c")
     html = HTML_TEMPLATE
-    html = html.replace("@@WM_CSS@@", html_watermark_css())
-    html = html.replace("@@WM_DIV@@", html_watermark_div())
     html = html.replace("@@PRODUCTS@@", data)
     html = html.replace("@@PANELS@@", "\n".join(panel_html(p) for p in products))
     OUT_HTML.write_text(html, encoding="utf-8")
@@ -1330,10 +1328,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .grid { grid-template-columns: 1fr; }
   }
 </style>
-<style>@@WM_CSS@@</style>
 </head>
 <body>
-@@WM_DIV@@
 <div class="wrap">
   <h1>美国周度出口销售</h1>
   <p class="sub">USDA FAS ESR，公吨。美豆、美玉米、美豆粕、美豆油、美小麦同一套目的地和表。出口目标读同目录工作簿各品种「累计出口目标(t)」，列是 16/17年度到 26/27年度，没有单独的本年度、下年度列，也没有 27/28。正数红、负数绿。默认显示美豆。</p>
@@ -1704,7 +1700,7 @@ def write_md(records):
         "首周月份用来确认官方营销年：都在 9 月上旬则是 9 月 1 日–8 月 31 日；都在 10 月上旬则是 10 月 1 日–9 月 30 日；都在 6 月上旬则是 6 月 1 日–5 月 31 日（美小麦）。"
         "季节性图从该营销年第 1 个报告周画起。月份刻度用周数最完整的一年。",
         "颜色从这一张图的最新营销年往回数：红、紫、黄、绿、蓝，更早浅色。红色不固定在某一年。",
-        "网页水印用 `excel_s/chart_watermark.py`，文字 shengbanghengchang_carina。",
+        "网页和截图不再加水印。",
         "",
         "某国某周没有记录时按 0。营销年第 1 周的未装运里通常已包含上一营销年结转的下年度销售，这是接口原数。",
         "",

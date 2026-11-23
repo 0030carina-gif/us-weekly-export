@@ -196,6 +196,26 @@ TABLE_METRICS = (
     ),
 )
 SHOT_ROWS = (("Total", "total"), ("中国", "cn"), ("除中国外", "excn"))
+# 美豆粕截图区用欧盟 / 除欧盟外；其余品种仍用中国 / 除中国外。
+SHOT_ROWS_MEAL = (("Total", "total"), ("欧盟", "eu"), ("除欧盟外", "exeu"))
+
+
+def shot_rows_for(product_id: str):
+    if product_id == "meal":
+        return SHOT_ROWS_MEAL
+    return SHOT_ROWS
+
+
+def series_ids():
+    """季节图序列 id：目的地分组，外加截图用的除欧盟外（不进下拉和目的地表）。"""
+    ids = []
+    for _g, _n, i, _a in ROWS:
+        if i not in ids:
+            ids.append(i)
+    if "exeu" not in ids:
+        ids.append("exeu")
+    return ids
+
 SHOT_FIELDS = (
     ("currentMYNetSales", "本年度净销售", "万吨"),
     ("currentMYTotalCommitment", "本年度总销售", "万吨"),
@@ -624,10 +644,7 @@ def build_series(raw, weeks, present_codes, old_vietnam):
     code_map["ca"] = code_map["pk"] + code_map["tr"]
     code_map["af"] = code_map["eg"] + code_map["dz"]
     all_codes = tuple(sorted(present_codes))
-    ids = []
-    for _g, _n, i, _a in ROWS:
-        if i not in ids:
-            ids.append(i)
+    ids = series_ids()
     values = {i: {} for i in ids}
     for year, days in weeks.items():
         lab = label_of_api(year)
@@ -638,10 +655,13 @@ def build_series(raw, weeks, present_codes, old_vietnam):
             total = sum_codes(raw, year, day, all_codes)
             parts["total"] = total
             parts["excn"] = subtract(total, parts["cn"])
+            parts["exeu"] = subtract(total, parts["eu"])
             # 恒等
             for f in list(API_FIELDS) + ["grossMinusNet"]:
                 if parts["excn"][f] + parts["cn"][f] != total[f]:
                     fail(f"{lab} {day} 除中国外 + 中国 ≠ Total")
+                if parts["exeu"][f] + parts["eu"][f] != total[f]:
+                    fail(f"{lab} {day} 除欧盟外 + 欧盟 ≠ Total")
                 if parts["ea"][f] != parts["cn"][f] + parts["jp"][f] + parts["kr"][f] + parts["tw"][f]:
                     fail(f"{lab} {day} 东亚加总不一致")
                 if parts["eupuk"][f] != parts["eu"][f] + parts["uk"][f]:
@@ -746,10 +766,7 @@ def compare_at(values, targets, ident, label, index, field, kind):
 def series_payload(values, targets, weeks):
     labels = [label_of_api(y) for y in sorted(weeks)]
     week_map = {label_of_api(y): weeks[y] for y in weeks}
-    ids = []
-    for _g, _n, i, _a in ROWS:
-        if i not in ids:
-            ids.append(i)
+    ids = series_ids()
     series = {}
     for ident in ids:
         series[ident] = {}
@@ -849,7 +866,7 @@ def write_snapshot_sheet(wb, payload, release_day):
         cell.border = THIN
     lab = latest["year"]
     wi = latest["weekIndex"] - 1
-    for r_i, (name, ident) in enumerate(SHOT_ROWS):
+    for r_i, (name, ident) in enumerate(shot_rows_for(payload.get("id"))):
         excel_row = 4 + r_i
         cell = ws.cell(excel_row, 1, name)
         cell.font = FONT_AGG
@@ -1010,7 +1027,7 @@ def write_detail_sheet(wb, values, targets, weeks):
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
 
 
-def write_code_sheet(wb, names, code_map, old_vietnam, present_codes):
+def write_code_sheet(wb, names, code_map, old_vietnam, present_codes, product_id=None):
     ws = wb.create_sheet("目的地代码")
     ws.append(["id", "页面名称", "组成", "countryCode", "FAS 英文名", "说明"])
     for cell in ws[1]:
@@ -1023,6 +1040,7 @@ def write_code_sheet(wb, names, code_map, old_vietnam, present_codes):
         "sea": "印尼+泰国+越南+孟加拉",
         "ca": "巴基斯坦+土耳其。按用户分组，不是 FAS 的地区名",
         "eu": "欧盟成员国目的地之和，不含英国。比卢为一个代码。克罗地亚 4791 并入",
+        "exeu": "Total − 欧盟，美豆粕截图区使用",
         "eupuk": "欧盟 + 英国",
         "af": "埃及+阿尔及利亚",
         "unk": "FAS UNKNOWN，已包含在 Total 里，这里单列",
@@ -1042,6 +1060,8 @@ def write_code_sheet(wb, names, code_map, old_vietnam, present_codes):
             ])
     ws.append(["total", "Total", desc["total"], "—", "全部 countryCode", "不把地区行再加总"])
     ws.append(["excn", "除中国外", desc["excn"], "—", "Total − 5700", ""])
+    if product_id == "meal":
+        ws.append(["exeu", "除欧盟外", desc["exeu"], "—", "Total − 欧盟成员国之和", "仅美豆粕截图区使用"])
     if old_vietnam:
         ws.append(["vn", "越南", "5520+5510", VIETNAM_OLD, names.get(VIETNAM_OLD, ""), "旧码并入越南"])
     ws.append(["—", "不计入欧盟", "英国虽在 FAS regionId=1，但按用户要求单列", UK_CODE, names.get(UK_CODE, ""), ""])
@@ -1101,7 +1121,8 @@ def _cls(tenths):
     return "zero"
 
 
-# 截图区 Total、中国、除中国外三行都画装运进度和本年度销售进度。
+# 截图区三行都画装运进度和本年度销售进度。
+# 美豆粕是 Total、欧盟、除欧盟外；其余品种是 Total、中国、除中国外。
 # 分母都是该品种总出口目标，不是分项目标。
 def shot_block(payload) -> str:
     latest = payload["latest"]
@@ -1117,7 +1138,7 @@ def shot_block(payload) -> str:
             f'<div class="shot-colhead">{label}<small>{notes[key]} · {unit}</small></div>'
         )
     body = ["".join(heads)]
-    for name, ident in SHOT_ROWS:
+    for name, ident in shot_rows_for(payload["id"]):
         row = [f'<div class="shot-rowhead">{name}</div>']
         for key, _label, unit in SHOT_FIELDS:
             row.append(
@@ -1227,9 +1248,21 @@ def foot_text(payload) -> str:
 
 def other_block(payload) -> str:
     pid = payload["id"]
+    if pid == "meal":
+        shot_intro = (
+            "截图区：净销售、总销售、装运进度和本年度销售进度都是 Total、欧盟、除欧盟外三行。"
+            "欧盟和除欧盟外的装运进度、销售进度也用该品种总出口目标做分母"
+            "（累计装运或本年度总销售除以同一个出口目标）。"
+        )
+    else:
+        shot_intro = (
+            "截图区：净销售、总销售、装运进度和本年度销售进度都是 Total、中国、除中国外三行。"
+            "中国和除中国外的装运进度、销售进度也用该品种总出口目标做分母"
+            "（累计装运或本年度总销售除以同一个出口目标）。"
+        )
     return (
         '<h2 class="sec">其他指标</h2>'
-        '<p class="def">截图区：净销售、总销售、装运进度和本年度销售进度都是 Total、中国、除中国外三行。中国和除中国外的装运进度、销售进度也用该品种总出口目标做分母（累计装运或本年度总销售除以同一个出口目标）。这里可再按目的地看其余指标，横轴从该营销年第 1 周起，最新一周标在端点旁。</p>'
+        f'<p class="def">{shot_intro}这里可再按目的地看其余指标，横轴从该营销年第 1 周起，最新一周标在端点旁。</p>'
         '<div class="controls">'
         f'<label for="dest-{pid}">目的地</label>'
         f'<select id="dest-{pid}"></select>'
@@ -1686,7 +1719,8 @@ def write_md(records):
         "",
         "装运进度 = 该行 accumulatedExports / 该品种总出口目标。"
         "本年度销售进度 = 该行 currentMYTotalCommitment / 同一个出口目标。"
-        "Total、中国、除中国外三行都用这同一个品种总目标做分母，不是分项目标。"
+        "截图区各行都用这同一个品种总目标做分母，不是分项目标："
+        "美豆、美玉米、美豆油、美小麦是 Total、中国、除中国外；美豆粕是 Total、欧盟、除欧盟外。"
         "下年度销售进度 = nextMYOutstandingSales / 下年度出口目标。",
         "",
         "## 接口与营销年",
@@ -1713,12 +1747,14 @@ def write_md(records):
         "",
         "## 目的地",
         "",
-        "五个品种用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
+        "五个品种的目的地下拉和三张表仍用同一套分组。Total 是该周全部目的地之和，含中国和 Unknown。除中国外 = Total − 中国 5700。",
         "东亚 = 中国 5700、日本 5880、韩国 5800、中国台湾 5830。",
         "东南亚 = 印尼 5600、泰国 5490、越南 5520、孟加拉 5380。",
         "中亚 = 巴基斯坦 5350、土耳其 4890。这是指定分组，不是 FAS 地区名。",
-        "欧盟是成员国相加，不含英国 4120。比卢是代码 4230。克罗地亚 4791 在 FAS 里属 OTHER EUROPE，仍并入欧盟。",
+        "欧盟是成员国目的地相加，不含英国 4120。比卢是代码 4230。克罗地亚 4791 在 FAS 里属 OTHER EUROPE，仍并入欧盟。"
+        "countries 参考表里有官方集团行 EUROPEAN UNION - 27（countryCode 1），但周度缓存里没有这条记录，故不用集团行、只用成员国之和。"
         "集团行代码 1 若出现非零记录，脚本停止，避免和成员国加两次。",
+        "除欧盟外 = Total − 欧盟，只用于美豆粕截图区；其他品种截图区仍用中国和除中国外。",
         "欧盟+英国 = 欧盟 + 英国。非洲 = 埃及 7290 + 阿尔及利亚 7210。美洲只列墨西哥 2010。",
         "Unknown 是 9990，只在其他指标的下拉里，不进三张表。表内也不含 Total。地区行不能再加总去对 Total。",
         "",
@@ -1729,7 +1765,8 @@ def write_md(records):
         "",
         "## 页面",
         "",
-        "每个品种一页：白底截图区仍是 4 列。本年度净销售、本年度总销售、装运进度、本年度销售进度都是 Total、中国、除中国外三行。"
+        "每个品种一页：白底截图区仍是 4 列。本年度净销售、本年度总销售、装运进度、本年度销售进度三列指标不变。"
+        "美豆、美玉米、美豆油、美小麦三行仍是 Total、中国、除中国外；美豆粕三行是 Total、欧盟、除欧盟外。"
         "装运进度 = 该行累计装运 / 该品种总出口目标，本年度销售进度 = 该行本年度总销售 / 同一个出口目标。"
         "三行都画季节图，分母都是该品种总出口目标，不是分项目标。"
         "没有表格，没有目的地下拉。进度图纵轴是百分比，最新一周有数据标签。",
@@ -1784,15 +1821,21 @@ def write_md(records):
                 )
             return "出口目标表里没有该品种的本年度目标，装运进度、本年度销售进度留空。"
 
+        if spec["id"] == "meal":
+            split_a, split_b = "eu", "exeu"
+            label_a, label_b = "欧盟", "除欧盟外"
+        else:
+            split_a, split_b = "cn", "excn"
+            label_a, label_b = "中国", "除中国外"
         lines.append(
-            f"中国周度装运 {shown('cn','weeklyExports')} 万吨，累计装运 {shown('cn','accumulatedExports')} 万吨，"
-            f"本年度净销售 {shown('cn','currentMYNetSales')} 万吨，本年度总销售 {shown('cn','currentMYTotalCommitment')} 万吨，"
-            + prog_clause("cn")
-            + f"除中国外周度装运 {shown('excn','weeklyExports')} 万吨，累计装运 {shown('excn','accumulatedExports')} 万吨，"
-            f"本年度净销售 {shown('excn','currentMYNetSales')} 万吨，本年度总销售 {shown('excn','currentMYTotalCommitment')} 万吨，"
-            + prog_clause("excn")
+            f"{label_a}周度装运 {shown(split_a,'weeklyExports')} 万吨，累计装运 {shown(split_a,'accumulatedExports')} 万吨，"
+            f"本年度净销售 {shown(split_a,'currentMYNetSales')} 万吨，本年度总销售 {shown(split_a,'currentMYTotalCommitment')} 万吨，"
+            + prog_clause(split_a)
+            + f"{label_b}周度装运 {shown(split_b,'weeklyExports')} 万吨，累计装运 {shown(split_b,'accumulatedExports')} 万吨，"
+            f"本年度净销售 {shown(split_b,'currentMYNetSales')} 万吨，本年度总销售 {shown(split_b,'currentMYTotalCommitment')} 万吨，"
+            + prog_clause(split_b)
             + (
-                "中国和除中国外的装运进度、销售进度也用该品种总出口目标做分母。"
+                f"{label_a}和{label_b}的装运进度、销售进度也用该品种总出口目标做分母。"
                 if series["total"]["shipProg"][lab][wi] is not None
                 else ""
             )
@@ -1979,7 +2022,7 @@ def main():
         for key, zh, en, definition in TABLE_METRICS:
             write_metric_sheet(wb, payload, key, zh, en, definition)
         write_detail_sheet(wb, values, targets, weeks)
-        write_code_sheet(wb, names, code_map, old_vietnam, present_codes)
+        write_code_sheet(wb, names, code_map, old_vietnam, present_codes, spec["id"])
         write_target_sheet(wb, targets)
         out_xlsx = ROOT / spec["xlsx"]
         wb.save(out_xlsx)
@@ -1990,10 +2033,12 @@ def main():
         )
         latest = payload["latest"]
         week_tons = payload["series"]["total"]["weeklyExports"][latest["year"]][latest["weekIndex"] - 1]
-        cn_tons = payload["series"]["cn"]["weeklyExports"][latest["year"]][latest["weekIndex"] - 1]
+        split_id = "eu" if spec["id"] == "meal" else "cn"
+        split_name = "欧盟" if spec["id"] == "meal" else "中国"
+        split_tons = payload["series"][split_id]["weeklyExports"][latest["year"]][latest["weekIndex"] - 1]
         print(
             f"{spec['zh']} 最新 {latest['date']} {latest['year']} 第{latest['weekIndex']}周 "
-            f"Total周度 {fmt_tenths(week_tons)} 万吨 中国周度 {fmt_tenths(cn_tons)} 万吨 "
+            f"Total周度 {fmt_tenths(week_tons)} 万吨 {split_name}周度 {fmt_tenths(split_tons)} 万吨 "
             f"营销年口径 {calendar}"
         )
     write_html(products)
